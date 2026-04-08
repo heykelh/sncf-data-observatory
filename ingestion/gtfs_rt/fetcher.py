@@ -15,7 +15,7 @@ import asyncio
 import os
 import signal
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -156,7 +156,7 @@ async def fetch_all_feeds() -> tuple[FetchResult, FetchResult]:
 def _print_fetch_summary(trip_result: FetchResult, alert_result: FetchResult) -> None:
     """Affiche un résumé formaté dans la console après chaque cycle."""
     table = Table(
-        title=f"[bold]Cycle d'ingestion — {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC[/bold]",
+        title=f"[bold]Cycle d'ingestion — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC[/bold]",
         show_header=True,
         header_style="bold cyan",
     )
@@ -241,6 +241,10 @@ async def _scheduled_fetch_job() -> None:
 
     # Affichage console
     _print_fetch_summary(trip_result, alert_result)
+
+    from ingestion.navitia.client import enrich_trip_updates
+    trip_ids = [t.trip.trip_id for t in trip_result.trip_updates if t.trip.trip_id]
+    enrichments = await enrich_trip_updates(trip_ids)
 
     # écriture en DuckDB via storage.writer
     from storage.writer import write_fetch_results

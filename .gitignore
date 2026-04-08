@@ -213,3 +213,8 @@ __pycache__/
 *.pyc
 .venv/
 *.parquet
+
+# DuckDB
+data/*.duckdb
+data/*.wal
+data/*.db

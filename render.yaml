@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: sncf-data-observatory
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: GTFS_RT_TRIP_UPDATES_URL
+        value: https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates
+      - key: GTFS_RT_SERVICE_ALERTS_URL
+        value: https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-service-alerts
+      - key: FETCH_INTERVAL_SECONDS
+        value: 120
+      - key: DUCKDB_PATH
+        value: /opt/render/project/src/data/observatory.duckdb

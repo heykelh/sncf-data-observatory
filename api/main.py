@@ -49,18 +49,14 @@ from ingestion.regularity.loader import (
 from storage.database import get_db, get_db_size_mb, get_latest_fetch_info, get_table_stats, init_db
 
 # ---------------------------------------------------------------------------
-# Lifespan — démarrage et arrêt propres
+# Lifespan
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Initialise la DB, démarre le scheduler GTFS-RT au lancement de l'API.
-    L'arrête proprement à l'extinction.
-    """
     logger.info("API démarrage — initialisation")
 
-    # Init DB (crée les tables si elles n'existent pas — idempotent)
+    # Init DB (crée les tables si elles n'existent pas)
     try:
         init_db()
         logger.info("DB initialisée")
@@ -71,22 +67,37 @@ async def lifespan(app: FastAPI):
     logger.info("Lancement du scheduler GTFS-RT")
     start_scheduler()
 
-    # Chargement initial des données de régularité si la table est vide
+    # Chargement initial des données si tables vides
     try:
         with get_db(read_only=True) as conn:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM bronze.regularity_raw"
-            ).fetchone()[0]
+            try:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM bronze.regularity_raw"
+                ).fetchone()[0]
+            except Exception:
+                count = 0
 
         if count == 0:
-            logger.info("Données de régularité absentes — chargement initial...")
-            asyncio.create_task(load_all_regularity_data())
+            logger.info("Données absentes — chargement initial en arrière-plan...")
+            async def init_data():
+                try:
+                    await load_all_regularity_data()
+                    logger.success("Données régularité chargées")
+                except Exception as e:
+                    logger.warning(f"Régularité : {e}")
+                try:
+                    from ingestion.gtfs_static.loader import load_gtfs_stops
+                    await load_gtfs_stops()
+                    logger.success("Référentiel gares chargé")
+                except Exception as e:
+                    logger.warning(f"GTFS stops : {e}")
+            asyncio.create_task(init_data())
         else:
-            logger.info(f"Données de régularité déjà en base ({count} enregistrements)")
+            logger.info(f"Données déjà en base ({count} enregistrements)")
     except Exception as e:
-        logger.warning(f"Vérification régularité : {e}")
+        logger.warning(f"Init data : {e}")
 
-    yield  # L'API tourne ici
+    yield
 
     logger.info("API arrêt — shutdown scheduler")
     stop_scheduler()
@@ -109,7 +120,6 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS — autorise tout (simplifié pour Render + Vercel)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -120,17 +130,17 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Schémas de réponse Pydantic
+# Schémas Pydantic
 # ---------------------------------------------------------------------------
 
 class HealthResponse(BaseModel):
-    status:        str
-    pipeline:      str
-    cycle_count:   int
-    db_size_mb:    float
-    table_stats:   dict
-    last_fetch:    Optional[dict]
-    timestamp:     str
+    status:      str
+    pipeline:    str
+    cycle_count: int
+    db_size_mb:  float
+    table_stats: dict
+    last_fetch:  Optional[dict]
+    timestamp:   str
 
 
 class TripSummary(BaseModel):
@@ -568,7 +578,6 @@ async def kpi_top_delays(
 async def resolve_stops(
     uic_codes: str = Query(..., description="Codes UIC séparés par virgule")
 ):
-    """Résout des codes UIC en noms de gares."""
     codes = [c.strip() for c in uic_codes.split(",") if c.strip()]
     if not codes:
         return {"stops": {}}
@@ -759,7 +768,10 @@ async def websocket_live(ws: WebSocket):
             "total_trips":     len(trip_result.trip_updates),
             "delayed_trips":   delayed,
             "cancelled_trips": cancelled,
-            "active_alerts":   len([a for a in (alert_result.service_alerts if alert_result else []) if a.is_active_now]),
+            "active_alerts":   len([
+                a for a in (alert_result.service_alerts if alert_result else [])
+                if a.is_active_now
+            ]),
             "quality_score":   trip_result.quality_score,
             "freshness_s":     trip_result.data_freshness_seconds,
         }, default=str))
